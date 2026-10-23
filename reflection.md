@@ -1,39 +1,58 @@
-# Lab 5 Reflection (DRAFT)
+# Lab 5 Reflection: Static Code Analysis
 
-> The handout's four questions were not in the material I had, so the headings below are my guess at common themes. Replace each heading with the handout's exact question, keep whichever points answer it, and rewrite in your own words before submitting.
+**Name:** Avyukt Ranjan  **SRN:** PES1UG24AM060  **Repo:** L5_57_loan-eligibility (`loan_calculator.py`)
 
-## 1. What did the tools catch, and what did they miss?
+## Q1. What is the purpose and scope of static code analysis, and what does each of the three tools check?
 
-Pylint, Flake8 and Bandit found the style problems, the unsafe patterns (`marshal`, FTP, a hardcoded password, `subprocess`, `random`) and the resource leaks. They found **none** of the bugs that make the program give wrong answers. Pylint's score went from 5.17 to 10.00 and Bandit's findings from 8 to 0, but every wrong number in the demo came from reading the output and checking it by hand:
+Static analysis examines source code without running it, to find bugs, vulnerabilities and style violations early and cheaply. Each tool covers a different slice:
 
-- EMI of 375,000 instead of 10,379 (rate unit mismatch)
-- Max loan of 900,000 instead of about 722,600 (interest ignored)
-- Interest saved of 62,275 instead of 12,275 (prepaid principal counted as interest)
-- A score of 950 rated `"LOW"`
-- A `"crypto"` loan and a FOIR-0.8 applicant both approved
+- **Pylint** is the strict code reviewer. It checks code quality and design: naming, missing docstrings, unused imports and variables, dangerous defaults, resource handling.
+- **Flake8** is the grammar checker. It enforces PEP 8 formatting: blank lines, line length, whitespace, unused imports.
+- **Bandit** is the security guard. It flags insecure patterns: unsafe deserialisation, plaintext protocols, hardcoded passwords, weak randomness, shell and subprocess use.
 
-A tool can only flag patterns it knows. It cannot know that a bank's EMI should be about 2 % of the loan, so a clean report is not proof that the code is correct.
+On my file the three tools reported 43 Pylint messages (score 5.17/10), 22 Flake8 messages and 8 Bandit findings (2 High, 1 Medium, 5 Low).
 
-## 2. How did you decide what to fix first?
+## Q2. Which issues did you find and fix, and how did you prioritise them by severity?
 
-I ranked by the damage a bug could do, not by how many messages it produced:
+I fixed far more than the required four, in three commits (one per tool).
 
-1. Logic bugs that approve loans wrongly or compute money wrongly (rows 1-3, 7): direct financial loss for the bank.
-2. Security issues that expose data or credentials (rows 4-6).
-3. Robustness and data-loss bugs (rows 9-12).
-4. Style, naming and docstrings, which make up most of the message count but carry the least risk.
+**Bandit (security).**
+- `marshal` deserialisation (B302, Medium) replaced with JSON.
+- Plain FTP (B402/B321, High) replaced with FTPS (`FTP_TLS` with an encrypted data channel).
+- The hardcoded password (B107) removed and read from environment variables instead.
+- `subprocess` call to `mail` (B404/B603/B607) replaced with `smtplib`.
+- `random` for application IDs (B311) replaced with `secrets`.
 
-This is why the Pylint score is a poor priority list: 32 of its 43 messages were style or naming.
+**Pylint (quality and logic).**
+- The mutable default argument `history=[]` removed. It was shared across calls and grew forever.
+- Files opened without `with`.
+- camelCase function names changed to snake_case, and docstrings added.
+- The `global` statement, an unused import and an unused variable cleaned up.
+- A demo that ran on import now sits behind `if __name__ == "__main__":`.
 
-## 3. Were any findings false positives, or hard to fix cleanly?
+**Flake8 (formatting).** Blank lines, line length (79), an unused import and an f-string with no placeholders.
 
-Bandit still blacklists the whole `ftplib` module, even when FTPS is used correctly. I switched to `FTP_TLS` with an encrypted data channel and added `# nosec B402` with the reason in a comment. A `nosec` is only acceptable when it is justified in writing, and it should be reviewed, not used to silence a tool. The cleanest fix would be SFTP via a third-party library, which I did not add to avoid a new dependency.
+I prioritised by the damage a problem could do: logic errors that approve loans or compute money wrongly, then security issues, then robustness, then style. The Pylint score is not a priority list, because 32 of its 43 messages were style or naming.
 
-The Pylint "too many arguments" message disappeared only because the `history` parameter was dead code. The naming warnings (C0103) were pure style, but they matter once other code imports these functions, because renaming later breaks callers.
+## Q3. What did the tools miss, and how did you find those problems?
 
-## 4. How would you use static analysis in a real project?
+None of the tools flagged the bugs that made the program give wrong answers. I found them by reading the demo output and checking it by hand:
 
-- Run all three tools automatically (pre-commit hook and CI) so problems are caught before review, not in a lab at the end.
-- Fail the build on Bandit High/Medium findings. Treat Pylint style messages as advisory.
-- Pair the tools with unit tests. The wrong EMI and max-loan figures would be caught by a test that compares against a known value, which is how I verified the fixes.
-- Keep secrets in environment variables or a secrets manager, never in source control.
+- The EMI printed 375,000 instead of 10,379.18. The rate unit was inconsistent (`9` passed where `0.09` was expected).
+- Eligibility returned `True` for an applicant with a FOIR of 0.8 (limit 0.5) and for the unsupported loan type "crypto". A shortcut (`credit_score > 750 or income > 25000`) skipped the mandatory checks.
+- The maximum loan was 900,000 instead of about 722,600, because the code ignored interest.
+- Interest saved was 62,275 instead of 12,275, because the prepaid principal was counted as interest.
+- A credit score of 950 was rated LOW instead of INVALID.
+- Saved loan records were overwritten on every run.
+
+A clean report is not proof of correct behaviour. The tools only know patterns, not what a correct EMI should be.
+
+## Q4. How has static analysis contributed to code quality and maintainability, and how would you use it in future?
+
+Static analysis gave me a measurable, repeatable review: Pylint went from 5.17 to 10.00, Flake8 from 22 messages to 0, and Bandit from 8 findings to 0. The result is code that is safer, easier to read and easier to change. The one exception is a justified `# nosec B402` on the FTPS import, because Bandit blacklists the whole `ftplib` module even when TLS is used. SFTP would be the ideal replacement, but it needs a third-party library.
+
+In future projects I would:
+- Run all three tools automatically (pre-commit hook and CI), and fail the build on Bandit High and Medium findings.
+- Treat Pylint style messages as advisory, ranked below logic and security problems.
+- Pair the tools with unit tests, because the wrong EMI and loan figures above would be caught by tests against known values, not by a linter.
+- Keep secrets in environment variables or a secrets manager, never in source code.
