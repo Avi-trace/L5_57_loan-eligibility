@@ -1,9 +1,10 @@
 import os
 import math
-import ftplib
-import marshal
-import random
-import subprocess
+import json
+import secrets
+import smtplib
+from email.message import EmailMessage
+from ftplib import FTP_TLS  # nosec B402 - FTPS (explicit TLS) is used below
 from datetime import datetime
 
 # Global loan book
@@ -48,30 +49,42 @@ def amortisationSchedule(principal, annual_rate, years):
     return rows
 
 def applicationId():
-    return "LN-" + str(random.randint(10000000, 99999999))
+    while True:
+        app_id = "LN-" + str(10000000 + secrets.randbelow(90000000))
+        if app_id not in applications:
+            return app_id
 
-def saveApplication(name, amount, file="loans.bin"):
+def saveApplication(name, amount, file="loans.json"):
+    if os.path.exists(file):
+        loadApplications(file)  # keep records saved by earlier runs
     app_id = applicationId()
     applications[app_id] = {"name": name, "amount": amount, "date": str(datetime.now())}
-    f = open(file, "wb")
-    f.write(marshal.dumps(applications))
-    f.close()
+    with open(file, "w", encoding="utf-8") as f:
+        json.dump(applications, f, indent=2)
     return app_id
 
-def loadApplications(file="loans.bin"):
+def loadApplications(file="loans.json"):
     global applications
-    f = open(file, "rb")
-    applications = marshal.loads(f.read())
-    f.close()
+    with open(file, "r", encoding="utf-8") as f:
+        applications = json.load(f)
 
-def uploadToBureau(report_path, user="loanops", password="Bureau#2024"):
-    ftp = ftplib.FTP(BUREAU_HOST)
-    ftp.login(user, password)
-    ftp.storbinary("STOR " + os.path.basename(report_path), open(report_path, "rb"))
-    ftp.quit()
+def uploadToBureau(report_path):
+    user = os.environ["BUREAU_USER"]
+    password = os.environ["BUREAU_PASSWORD"]
+    with FTP_TLS(BUREAU_HOST) as ftp:
+        ftp.login(user, password)
+        ftp.prot_p()  # encrypt the data channel as well
+        with open(report_path, "rb") as report:
+            ftp.storbinary("STOR " + os.path.basename(report_path), report)
 
 def notifyApplicant(email, status):
-    subprocess.run(["mail", "-s", "Loan " + status, email])
+    message = EmailMessage()
+    message["Subject"] = "Loan " + status
+    message["From"] = os.environ.get("MAIL_FROM", "loans@bank.example")
+    message["To"] = email
+    message.set_content("Your loan application status: " + status)
+    with smtplib.SMTP(os.environ.get("SMTP_HOST", "localhost")) as smtp:
+        smtp.send_message(message)
 
 def interestSaved(principal, annual_rate, years, prepayment):
     original = calculateEMI(principal, annual_rate, years) * years * 12
